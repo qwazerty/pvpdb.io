@@ -1,0 +1,5 @@
+__pycache__
+tokens.py
+*.lua
+*.json
+*.tmp
