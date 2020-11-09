@@ -47,6 +47,7 @@ def generate_realm_slug(file):
     return json.loads(data)
 
 def export_characters(db_characters, region, faction):
+    print("[INFO] Export {region}-{faction}".format(region=region, faction=faction))
     realms = db_characters.distinct('realm')
     with open('db_characters_{region}_{faction}.lua'.format(region=region, faction=faction), 'w') as f:
         f.write('local _, ns = ...\n')
@@ -83,12 +84,9 @@ def export_characters(db_characters, region, faction):
         f.write('Login_EventFrame:SetScript("OnEvent", Login_OnEvent)')
 
 def main():
-    print("[INFO] Export Test")
-    export_characters(pvpdb['characters_eu_test'], "test", "test")
-    print("[INFO] Export Alliance")
-    export_characters(pvpdb['characters_eu_alliance'], "eu", "alliance")
-    print("[INFO] Export Horde")
-    export_characters(pvpdb['characters_eu_horde'], "eu", "horde")
+    for r in ["eu", "us", "kr", "tw"]:
+        for f in ["alliance", "horde"]:
+            export_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f)
 
 realm_slug = generate_realm_slug("db_realms.lua")
 main()

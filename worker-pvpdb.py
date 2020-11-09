@@ -109,7 +109,7 @@ def init_characters(db_characters, region, faction, realm_slug):
     db_characters.create_index([('realm', pymongo.ASCENDING)])
     db_characters.create_index([('name', pymongo.ASCENDING), ('realm', pymongo.ASCENDING)], unique=True)
     for realm in characters:
-        print("[INFO] Init realm {region}-{realm}".format(region=region, realm=realm))
+        print("[INFO] Init {region}-{faction}-{realm}".format(region=region, faction=faction, realm=realm))
         doc = [ { "name": c, "realm": realm, "lastModified": None } for c in characters[realm] if db_characters.find_one({"name": c, "realm": realm}) is None ]
         if len(doc) == 0:
             print("[INFO] 0 documents to insert, skipping")
@@ -173,37 +173,17 @@ def update_characters(db_characters, region, faction):
 
 def main():
     if len(sys.argv) >= 3 and sys.argv[2] == "init":
-        if len(sys.argv) == 3 or sys.argv[3] == "alliance":
-            print("[INFO] Init Alliance")
-            init_characters(pvpdb['characters_eu_alliance'], "eu", "alliance", realm_slug)
-        if len(sys.argv) == 3 or sys.argv[3] == "horde":
-            print("[INFO] Init Horde")
-            init_characters(pvpdb['characters_eu_horde'], "eu", "horde", realm_slug)
+        for r in ["eu", "us", "kr", "tw"]:
+            for f in ["alliance", "horde"]:
+                init_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f, realm_slug)
         if len(sys.argv) >= 4 and sys.argv[3] == "test":
-            print("[INFO] Init Test")
             init_characters(pvpdb['characters_eu_test'], "eu", "test", realm_slug)
     elif len(sys.argv) >= 3 and sys.argv[2] == "update":
-        if len(sys.argv) == 3 or sys.argv[3] == "alliance":
-            print("[INFO] Update Alliance")
-            update_characters(pvpdb['characters_eu_alliance'], "eu", "alliance")
-        if len(sys.argv) == 3 or sys.argv[3] == "horde":
-            print("[INFO] Update Horde")
-            update_characters(pvpdb['characters_eu_horde'], "eu", "horde")
+        for r in ["eu", "us", "kr", "tw"]:
+            for f in ["alliance", "horde"]:
+                update_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f)
         if len(sys.argv) >= 4 and sys.argv[3] == "test":
-            print("[INFO] Update Test")
             update_characters(pvpdb['characters_eu_test'], "eu", "test")
 
 realm_slug = generate_realm_slug("db_realms.lua")
 main()
-
-#c = "Aarista"
-#realm = "Durotan"
-#doc = pvpdb['characters_eu_alliance'].find_one_and_update({"name": c, "realm": realm}, {"$currentDate": {"lastModified": True}})
-#doc = pvpdb['characters_eu_alliance'].find_one_and_update(
-#    {"name": c, "realm": realm},
-#    {
-#        "$set": {"honor_level": 5},
-#        "$currentDate": {"lastModified": True}
-#    }
-#)
-#print(doc)
