@@ -35,27 +35,27 @@ debug = False
 client = pymongo.MongoClient(tokens.mongo_url)
 pvpdb = client['pvpdb']
 
-def generate_realm_slug(file):
-    with open(file, "r") as f:
-        data = f.read()
-        data = data.replace("local _, ns = ...", "")
-        data = data.replace("ns.realmSlugs = ", "")
-        data = data.replace("[", "")
-        data = data.replace("]", "")
-        data = data.replace(" =", ":")
-        data = data.replace(",\n}", "}")
-    return json.loads(data)
+def export_realms(db_characters, region):
+    print("[INFO] Export realms {region}".format(region=region))
+    realms = db_characters.distinct('realm')
+    with open('db/db_realms_{region}.lua'.format(region=region), 'w') as f:
+        f.write('local _, ns = ...\n')
+        f.write('local region = "{region}"\n'.format(region=region))
+        f.write('local F\n\n')
+        #f.write('local function Login_OnEvent(self, event, ...)\n')
+        for realm in realms:
+            f.write('F = function() ns.db["{realm}"]={{["Alliance"]={{}},["Horde"]={{}}}} end; F()\n'.format(realm=realm))
 
 def export_characters(db_characters, region, faction):
     print("[INFO] Export {region}-{faction}".format(region=region, faction=faction))
     realms = db_characters.distinct('realm')
-    with open('db_characters_{region}_{faction}.lua'.format(region=region, faction=faction), 'w') as f:
+    with open('db/db_characters_{region}_{faction}.lua'.format(region=region, faction=faction), 'w') as f:
         f.write('local _, ns = ...\n')
         f.write('local region = "{region}"\n'.format(region=region))
         f.write('local F\n\n')
-        f.write('local function Login_OnEvent(self, event, ...)\n')
+        #f.write('local function Login_OnEvent(self, event, ...)\n')
         for realm in realms:
-            f.write('F = function() ns.db["{realm}"]={{'.format(realm=realm))
+            f.write('F = function() ns.db["{realm}"]["{faction}"]={{'.format(realm=realm, faction=faction.capitalize()))
             characters = db_characters.find({'realm': realm})
             for i,char in enumerate(characters):
                 if i != 0:
@@ -78,15 +78,15 @@ def export_characters(db_characters, region, faction):
                 f.write('}')
             #f.write('} end; if region == ns.REGION then F() end\n')
             f.write('} end; F()\n')
-        f.write('end\n\n')
-        f.write('local Login_EventFrame = CreateFrame("Frame")\n')
-        f.write('Login_EventFrame:RegisterEvent("PLAYER_LOGIN")\n')
-        f.write('Login_EventFrame:SetScript("OnEvent", Login_OnEvent)')
+        #f.write('end\n\n')
+        #f.write('local Login_EventFrame = CreateFrame("Frame")\n')
+        #f.write('Login_EventFrame:RegisterEvent("PLAYER_LOGIN")\n')
+        #f.write('Login_EventFrame:SetScript("OnEvent", Login_OnEvent)')
 
 def main():
     for r in ["eu", "us", "kr", "tw"]:
+        export_realms(pvpdb['characters_{r}_alliance'.format(r=r)], r)
         for f in ["alliance", "horde"]:
             export_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f)
 
-realm_slug = generate_realm_slug("db_realms.lua")
 main()

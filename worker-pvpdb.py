@@ -103,7 +103,7 @@ def get_characters_list(file):
     return characters
 
 def init_characters(db_characters, region, faction, realm_slug):
-    characters = get_characters_list("db_{region}_{faction}_characters.lua".format(region=region, faction=faction))
+    characters = get_characters_list("rio/db_{region}_{faction}_characters.lua".format(region=region, faction=faction))
     db_characters.create_index([('lastModified', pymongo.ASCENDING)])
     db_characters.create_index([('name', pymongo.ASCENDING)])
     db_characters.create_index([('realm', pymongo.ASCENDING)])
@@ -176,14 +176,10 @@ def main():
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
                 init_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f, realm_slug)
-        if len(sys.argv) >= 4 and sys.argv[3] == "test":
-            init_characters(pvpdb['characters_eu_test'], "eu", "test", realm_slug)
     elif len(sys.argv) >= 3 and sys.argv[2] == "update":
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
                 update_characters(pvpdb['characters_{r}_{f}'.format(r=r, f=f)], r, f)
-        if len(sys.argv) >= 4 and sys.argv[3] == "test":
-            update_characters(pvpdb['characters_eu_test'], "eu", "test")
 
-realm_slug = generate_realm_slug("db_realms.lua")
+realm_slug = generate_realm_slug("rio/db_realms.lua")
 main()
