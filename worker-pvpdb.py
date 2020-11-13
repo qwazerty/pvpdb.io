@@ -78,10 +78,7 @@ def oauth_api_call(url):
         print("[WARN] > ConnectionError. Retrying...")
         print("[WARN] > {}".format(url))
         res = requests.get(url, headers=headers)
-        if (res.status_code == 200):
-            return json.loads(res.text)
-        else:
-            return {}
+        return res
 
 def generate_realm_slug(file):
     with open(file, "r") as f:
@@ -93,19 +90,6 @@ def generate_realm_slug(file):
         data = data.replace(" =", ":")
         data = data.replace(",\n}", "}")
     return json.loads(data)
-
-def generate_realm_slug_test():
-    namespace = "dynamic-eu"
-    realm_res = oauth_api_call(slug_url.format(region="eu", namespace=namespace))
-    if realm_res.status_code == 200:
-        realm_json = json.loads(res.text)
-        realms = {r['name']['en_US']:r['slug'] for r in realm_json['realms']}
-        print(realms)
-        return realms
-    else:
-        print("[ERROR] Could not generate realms_slug.")
-        print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
-        return {}
 
 def get_characters_list(file):
     characters = {}
@@ -148,24 +132,31 @@ def get_pvp_summary(doc, region):
             })
         if 'brackets' in stats_json:
             for bracket in stats_json['brackets']:
-                stats_bracket = oauth_api_call(bracket['href'].replace('http://', 'https://'))
-                if 'bracket' in stats_bracket:
-                    doc.setdefault('pvp-bracket', {})
-                    doc['pvp-bracket'].update({
-                        stats_bracket['bracket']['type']: {
-                            "current_rating": stats_bracket['rating'],
-                            "season_match_statistics" : {
-                                "played": stats_bracket['season_match_statistics']['played'],
-                                "won": stats_bracket['season_match_statistics']['won'],
-                                "lost": stats_bracket['season_match_statistics']['lost'],
+                res = oauth_api_call(bracket['href'].replace('http://', 'https://'))
+                if res.status_code == 200:
+                    stats_bracket = json.loads(res.text)
+                    if 'bracket' in stats_bracket:
+                        doc.setdefault('pvp-bracket', {})
+                        doc['pvp-bracket'].update({
+                            stats_bracket['bracket']['type']: {
+                                "current_rating": stats_bracket['rating'],
+                                "season_match_statistics" : {
+                                    "played": stats_bracket['season_match_statistics']['played'],
+                                    "won": stats_bracket['season_match_statistics']['won'],
+                                    "lost": stats_bracket['season_match_statistics']['lost'],
+                                }
                             }
-                        }
-                    })
+                        })
+                else:
+                    print("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+                    print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
+                    return True
+
     elif res.status_code == 404:
         print("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']))
         return False
     else:
-        print("[ERROR] Unexpected error for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+        print("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
         print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
         return True
     return True
@@ -194,9 +185,9 @@ def update_characters(db_characters, region, faction):
                 }
             )
             if res.acknowledged:
-                print("[INFO] Updated {}".format(doc))
+                print("[INFO] Updated {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), end='\r')
             else:
-                print("[ERROR] Mongo error for update {}".format(doc))
+                print("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
         else:
             print("[WARN] Deleting {}".format(doc))
             db_characters.remove({"_id": doc['_id']})
