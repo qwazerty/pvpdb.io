@@ -150,7 +150,7 @@ def get_pvp_summary(doc, region):
                 else:
                     print("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
                     print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
-                    return True
+                    return None
 
     elif res.status_code == 404:
         print("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']))
@@ -158,7 +158,7 @@ def get_pvp_summary(doc, region):
     else:
         print("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
         print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
-        return True
+        return None
     return True
 
 def update_characters(db_characters, region, faction):
@@ -175,7 +175,19 @@ def update_characters(db_characters, region, faction):
             print("[WARN] Realm not found for {region}-{faction}-{realm}-{name}".format(region=region, faction=faction, realm=doc['realm'], name=doc['name']))
             db_characters.remove({"_id": doc['_id']})
             continue
-        if get_pvp_summary(doc, region):
+        updated = get_pvp_summary(doc, region)
+        if updated == None:
+            res = db_characters.update_one(
+                {"_id": doc['_id']},
+                {
+                    "$set": {"lastModified": None}
+                }
+            )
+            if res.acknowledged:
+                print("[WARN] Reset lastModified for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+            else:
+                print("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+        elif updated == True:
             del doc['lastModified']
             res = db_characters.update_one(
                 {"_id": doc['_id']},
