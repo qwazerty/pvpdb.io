@@ -152,7 +152,7 @@ def get_pvp_summary(doc, region):
                     print("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
                     return None
 
-    elif res.status_code == 404:
+    elif res.status_code in [403, 404]:
         print("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']))
         return False
     else:
