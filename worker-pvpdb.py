@@ -42,7 +42,6 @@ class Oauth:
     def oauth_api_call(self, url):
         if debug:
             print("[DEBUG] oauth_api_call({})".format(url))
-        time.sleep(0.2)
         try:
             headers = {"Authorization": "Bearer " + self.token['access_token']}
             res = requests.get(url, headers=headers)
@@ -103,10 +102,13 @@ class Worker:
     mongo = None
     oauth = None
     realm_slug = None
+    progress = {"current": 0, "total": 0, "timer": 0}
 
-    def logger(self, msg, newline=True):
+    def logger(self, msg, newline=True, showTimer=False):
         print(" "*os.get_terminal_size()[0], end='\r')
-        print(msg, end=('\n' if newline else '\r'))
+        if showTimer:
+            print("[{current}/{total}]".format(current=self.progress['current'], total=self.progress['total']), end='')
+        print(msg, end='\n' if newline else '\r')
 
     def generate_realm_slug(self, file):
         with open(file, "r") as f:
@@ -154,14 +156,19 @@ class Worker:
             self.logger("[DEBUG] get_pvp_summary({doc}, {namespace})".format(doc=doc, namespace=namespace))
         res = self.oauth.oauth_api_call(pvp_summary_url.format(region=region, realm=self.realm_slug[doc['realm']], character=doc['name'].lower(), namespace=namespace))
         if res.status_code == 200:
-            stats_json = json.loads(res.text)
+            try:
+                stats_json = json.loads(res.text)
+            except json.decoder.JSONDecodeError as e:
+                self.logger("[ERROR] {e}".format(e=e.msg))
+                self.logger("[DEBUG] {text}".format(text=res.text))
+                return None
             if 'honor_level' in stats_json:
                 doc.update({
                     'honor_level': stats_json['honor_level']
                 })
             if 'brackets' in stats_json:
                 for bracket in stats_json['brackets']:
-                    res = self.oauth.oauth_api_call(bracket['href'])
+                    res = self.oauth.oauth_api_call(bracket['href'].replace('http://', 'https://'))
                     if res.status_code == 200:
                         stats_bracket = json.loads(res.text)
                         if 'bracket' in stats_bracket:
@@ -176,13 +183,19 @@ class Worker:
                                     }
                                 }
                             })
+                    elif res.status_code in [403, 404]:
+                        self.logger("[WARN] Bracket {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']), False)
+                        return False
                     else:
                         self.logger("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
                         self.logger("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
+                        if res.status_code == 503:
+                            self.logger("[ERROR] Sleep 600 seconds...")
+                            time.sleep(600)
                         return None
 
         elif res.status_code in [403, 404]:
-            self.logger("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']))
+            self.logger("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']), False)
             return False
         else:
             self.logger("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
@@ -192,14 +205,20 @@ class Worker:
 
     def update_characters(self, region, faction):
         db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=region, f=faction)]
+        self.progress["total"] = db_characters.count({})
+        self.progress['timer'] = 0
         killer = GracefulKiller()
         while not killer.kill_now:
+            self.progress['timer'] -= 1
+            if self.progress['timer'] <= 0:
+                self.progress['timer'] = 10
+                self.progress["current"] = db_characters.count({"lastModified": None})
             doc = db_characters.find_one_and_update(
                 {"lastModified": None},
                 {"$currentDate": {"lastModified": True}}
             )
             if doc == None:
-                self.logger("[INFO] No update found for {region} {faction}".format(region=region, faction=faction))
+                self.logger("[INFO] No update found for {region} {faction}".format(region=region, faction=faction), newline=True, showTimer=True)
                 break
             if doc['realm'] not in self.realm_slug:
                 self.logger("[WARN] Realm not found for {region}-{faction}-{realm}-{name}".format(region=region, faction=faction, realm=doc['realm'], name=doc['name']))
@@ -214,7 +233,7 @@ class Worker:
                     }
                 )
                 if res.acknowledged:
-                    self.logger("[WARN] Reset lastModified for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+                    self.logger("[WARN] Reset lastModified for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 else:
                     self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
             elif updated == True:
@@ -227,11 +246,11 @@ class Worker:
                     }
                 )
                 if res.acknowledged:
-                    self.logger("[INFO] Updated {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), False)
+                    self.logger("[INFO] Updated {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 else:
                     self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
             else:
-                self.logger("[WARN] Deleting {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), False)
+                self.logger("[WARN] Deleting {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 db_characters.remove({"_id": doc['_id']})
 
         if killer.kill_now:
