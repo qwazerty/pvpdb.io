@@ -42,9 +42,9 @@ def export_realms(db_characters, region):
         f.write('local _, ns = ...\n')
         f.write('local region = "{region}"\n'.format(region=region))
         f.write('local F\n\n')
-        #f.write('local function Login_OnEvent(self, event, ...)\n')
         for realm in realms:
-            f.write('F = function() ns.db["{realm}"]={{["Alliance"]={{}},["Horde"]={{}}}} end; F()\n'.format(realm=realm))
+            for faction in ["a", "h"]:
+                f.write('F = function() ns.db{faction}["{realm}"]={{}} end; F()\n'.format(faction=faction[:1], realm=realm))
 
 def export_characters(db_characters, region, faction):
     print("[INFO] Export {region}-{faction}".format(region=region, faction=faction))
@@ -53,9 +53,9 @@ def export_characters(db_characters, region, faction):
         f.write('local _, ns = ...\n')
         f.write('local region = "{region}"\n'.format(region=region))
         f.write('local F\n\n')
-        #f.write('local function Login_OnEvent(self, event, ...)\n')
+        f.write('local function Load(self, event, ...)\n')
         for realm in realms:
-            f.write('F = function() ns.db["{realm}"]["{faction}"]={{'.format(realm=realm, faction=faction.capitalize()))
+            f.write('F = function() ns.db{faction}["{realm}"]={{'.format(faction=faction[:1], realm=realm))
             characters = db_characters.find({'realm': realm})
             for i,char in enumerate(characters):
                 if i != 0:
@@ -76,12 +76,13 @@ def export_characters(db_characters, region, faction):
                             f.write('["cr"]={cr},'.format(cr=char_bracket['current_rating']))
                             f.write('["sms"]={{{won},{lost}}}}}'.format(won=char_bracket['season_match_statistics']['won'], lost=char_bracket['season_match_statistics']['lost']))
                 f.write('}')
-            #f.write('} end; if region == ns.REGION then F() end\n')
             f.write('} end; F()\n')
-        #f.write('end\n\n')
-        #f.write('local Login_EventFrame = CreateFrame("Frame")\n')
-        #f.write('Login_EventFrame:RegisterEvent("PLAYER_LOGIN")\n')
-        #f.write('Login_EventFrame:SetScript("OnEvent", Login_OnEvent)')
+        f.write('end\n')
+        f.write('local Load_Frame = CreateFrame("FRAME")\n')
+        f.write('if region == ns.REGION then\n')
+        f.write('    Load_Frame:RegisterEvent("PLAYER_ENTERING_WORLD")\n')
+        f.write('    Load_Frame:SetScript("OnEvent", Load)\n')
+        f.write('end\n')
 
 def main():
     for r in ["eu", "us", "kr", "tw"]:
