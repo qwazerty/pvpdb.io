@@ -18,7 +18,8 @@ debug = False
 slug_url = "https://{region}.api.blizzard.com/data/wow/realm/index?namespace={namespace}"
 pvp_summary_url = "https://{region}.api.blizzard.com/profile/wow/character/{realm}/{character}/pvp-summary?namespace={namespace}"
 token_url = 'https://eu.battle.net/oauth/token'
-character_days_ttl = 90
+season_url = "https://{region}.api.blizzard.com/data/wow/pvp-season/index?namespace={namespace}"
+character_days_ttl = 7
 
 class GracefulKiller:
     kill_now = False
@@ -103,6 +104,9 @@ class Worker:
     oauth = None
     realm_slug = None
     progress = {"current": 0, "total": 0, "timer": 0}
+    region = None
+    faction = None
+    current_season = None
 
     def logger(self, msg, newline=True, showTimer=False):
         print(" "*os.get_terminal_size()[0], end='\r')
@@ -121,6 +125,11 @@ class Worker:
             data = data.replace(",\n}", "}")
         return json.loads(data)
 
+    def set_current_season(self):
+        season_namespace = 'dynamic-{region}'.format(region=self.region)
+        res_season = self.oauth.oauth_api_call(season_url.format(region=self.region, namespace=season_namespace))
+        self.current_season = json.loads(res_season.text)['current_season']['id']
+
     def get_characters_list(self, file):
         characters = {}
         with open(file, "r") as f:
@@ -131,15 +140,15 @@ class Worker:
                     characters.update({r: c})
         return characters
 
-    def init_characters(self, region, faction):
-        characters = self.get_characters_list("rio/db_{region}_{faction}_characters.lua".format(region=region, faction=faction))
-        db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=region, f=faction)]
+    def init_characters(self):
+        characters = self.get_characters_list("rio/db_{region}_{faction}_characters.lua".format(region=self.region, faction=self.faction))
+        db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=self.region, f=self.faction)]
         db_characters.create_index([('lastModified', pymongo.ASCENDING)])
         db_characters.create_index([('name', pymongo.ASCENDING)])
         db_characters.create_index([('realm', pymongo.ASCENDING)])
         db_characters.create_index([('name', pymongo.ASCENDING), ('realm', pymongo.ASCENDING)], unique=True)
         for realm in characters:
-            self.logger("[INFO] Init {region}-{faction}-{realm}".format(region=region, faction=faction, realm=realm))
+            self.logger("[INFO] Init {region}-{faction}-{realm}".format(region=self.region, faction=self.faction, realm=realm))
             doc = [ { "name": c, "realm": realm, "lastModified": None } for c in characters[realm] if db_characters.find_one({"name": c, "realm": realm}) is None and realm in self.realm_slug ]
             if len(doc) == 0:
                 print("[INFO] 0 documents to insert, skipping")
@@ -150,11 +159,11 @@ class Worker:
                 else:
                     print("[ERROR] Could not insert {} documents".format(len(doc)))
 
-    def get_pvp_summary(self, doc, region):
-        namespace = "profile-{region}".format(region=region)
+    def get_pvp_summary(self, doc):
+        namespace = "profile-{region}".format(region=self.region)
         if debug:
             self.logger("[DEBUG] get_pvp_summary({doc}, {namespace})".format(doc=doc, namespace=namespace))
-        res = self.oauth.oauth_api_call(pvp_summary_url.format(region=region, realm=self.realm_slug[doc['realm']], character=doc['name'].lower(), namespace=namespace))
+        res = self.oauth.oauth_api_call(pvp_summary_url.format(region=self.region, realm=self.realm_slug[doc['realm']], character=doc['name'].lower(), namespace=namespace))
         if res.status_code == 200:
             try:
                 stats_json = json.loads(res.text)
@@ -173,21 +182,22 @@ class Worker:
                         stats_bracket = json.loads(res.text)
                         if 'bracket' in stats_bracket:
                             doc.setdefault('pvp-bracket', {})
-                            doc['pvp-bracket'].update({
-                                stats_bracket['bracket']['type']: {
-                                    "current_rating": stats_bracket['rating'],
-                                    "season_match_statistics" : {
-                                        "played": stats_bracket['season_match_statistics']['played'],
-                                        "won": stats_bracket['season_match_statistics']['won'],
-                                        "lost": stats_bracket['season_match_statistics']['lost'],
-                                    }
-                                }
-                            })
+                            doc['pvp-bracket'].setdefault(stats_bracket['bracket']['type'], {})
+                            doc['pvp-bracket'][stats_bracket['bracket']['type']].setdefault('current_statistics', {})
+                            doc['pvp-bracket'][stats_bracket['bracket']['type']].setdefault('s{current_season}_statistics'.format(current_season=self.current_season), {})
+                            statistics = {
+                                'rating': stats_bracket['rating'],
+                                'played': stats_bracket['season_match_statistics']['played'],
+                                'won': stats_bracket['season_match_statistics']['won'],
+                                'lost': stats_bracket['season_match_statistics']['lost']
+                            }
+                            doc['pvp-bracket'][stats_bracket['bracket']['type']]['current_statistics'].update(statistics)
+                            doc['pvp-bracket'][stats_bracket['bracket']['type']]['s{current_season}_statistics'.format(current_season=self.current_season)].update(statistics)
                     elif res.status_code in [403, 404]:
-                        self.logger("[WARN] Bracket {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']), False)
+                        self.logger("[WARN] Bracket {region}-{realm}-{name} not found".format(region=self.region, realm=doc['realm'], name=doc['name']), False)
                         return False
                     else:
-                        self.logger("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+                        self.logger("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
                         self.logger("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
                         if res.status_code == 503:
                             self.logger("[ERROR] Sleep 600 seconds...")
@@ -195,16 +205,16 @@ class Worker:
                         return None
 
         elif res.status_code in [403, 404]:
-            self.logger("[WARN] Characters {region}-{realm}-{name} not found".format(region=region, realm=doc['realm'], name=doc['name']), False)
+            self.logger("[WARN] Characters {region}-{realm}-{name} not found".format(region=self.region, realm=doc['realm'], name=doc['name']), False)
             return False
         else:
-            self.logger("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+            self.logger("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
             self.logger("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
             return None
         return True
 
-    def update_characters(self, region, faction):
-        db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=region, f=faction)]
+    def update_characters(self):
+        db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=self.region, f=self.faction)]
         self.progress["total"] = db_characters.count({})
         self.progress['timer'] = 0
         killer = GracefulKiller()
@@ -212,19 +222,20 @@ class Worker:
             self.progress['timer'] -= 1
             if self.progress['timer'] <= 0:
                 self.progress['timer'] = 10
-                self.progress["current"] = db_characters.count({"lastModified": None})
+                d = datetime.datetime.now() + datetime.timedelta(days=-character_days_ttl)
+                self.progress["current"] = db_characters.count({"lastModified": { "$lte": d }})
             doc = db_characters.find_one_and_update(
-                {"lastModified": None},
+                {"lastModified": { "$lte": d }},
                 {"$currentDate": {"lastModified": True}}
             )
             if doc == None:
-                self.logger("[INFO] No update found for {region} {faction}".format(region=region, faction=faction), newline=True, showTimer=True)
+                self.logger("[INFO] No update found for {region} {faction}".format(region=self.region, faction=self.faction), newline=True, showTimer=True)
                 break
             if doc['realm'] not in self.realm_slug:
-                self.logger("[WARN] Realm not found for {region}-{faction}-{realm}-{name}".format(region=region, faction=faction, realm=doc['realm'], name=doc['name']))
+                self.logger("[WARN] Realm not found for {region}-{faction}-{realm}-{name}".format(region=self.region, faction=self.faction, realm=doc['realm'], name=doc['name']))
                 db_characters.remove({"_id": doc['_id']})
                 continue
-            updated = self.get_pvp_summary(doc, region)
+            updated = self.get_pvp_summary(doc)
             if updated == None:
                 res = db_characters.update_one(
                     {"_id": doc['_id']},
@@ -233,9 +244,9 @@ class Worker:
                     }
                 )
                 if res.acknowledged:
-                    self.logger("[WARN] Reset lastModified for {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
+                    self.logger("[WARN] Reset lastModified for {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 else:
-                    self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+                    self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
             elif updated == True:
                 del doc['lastModified']
                 res = db_characters.update_one(
@@ -246,18 +257,18 @@ class Worker:
                     }
                 )
                 if res.acknowledged:
-                    self.logger("[INFO] Updated {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
+                    self.logger("[INFO] Updated {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 else:
-                    self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']))
+                    self.logger("[ERROR] Mongo error for update {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
             else:
-                self.logger("[WARN] Deleting {region}-{realm}-{name}".format(region=region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
+                self.logger("[WARN] Deleting {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']), newline=False, showTimer=True)
                 db_characters.remove({"_id": doc['_id']})
 
         if killer.kill_now:
-            self.logger("[INFO] Graceful shutdown...")
+            self.logger("[INFO] Graceful shutdown")
             sys.exit(0)
 
-    def __init__(self):
+    def __init__(self, region, faction):
         # Check usage
         if len(sys.argv) <= 1:
             self.logger("[ERROR] Usage: workers-pvpdb.py <tokenid> [action] [region] [faction]")
@@ -266,16 +277,20 @@ class Worker:
         self.realm_slug = self.generate_realm_slug('rio/db_realms.lua')
         self.oauth = Oauth()
         self.mongo = Mongo()
+        self.region = region
+        self.faction = faction
+        self.set_current_season()
 
 def main():
-    worker = Worker()
     if len(sys.argv) >= 3 and sys.argv[2] == "init":
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
-                worker.init_characters(r, f)
+                worker = Worker(r, f)
+                worker.init_characters()
     elif len(sys.argv) >= 3 and sys.argv[2] == "update":
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
-                worker.update_characters(r, f)
+                worker = Worker(r, f)
+                worker.update_characters()
 
 main()
