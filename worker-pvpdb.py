@@ -21,6 +21,12 @@ token_url = 'https://eu.battle.net/oauth/token'
 season_url = "https://{region}.api.blizzard.com/data/wow/pvp-season/index?namespace={namespace}"
 character_days_ttl = 7
 
+def usage():
+    print('Usage:')
+    print('  worker-pvpdb.py <init> <worker-id> : Init database from RaiderIO files')
+    print('  worker-pvpdb.py <update> <worker-id> : Update database from Blizzard API')
+    print('  worker-pvpdb.py <insert> <worker-id> <region> <faction> <realm> <name> : Insert a single character')
+
 class GracefulKiller:
     kill_now = False
     def __init__(self):
@@ -57,7 +63,7 @@ class Oauth:
             res = requests.get(url, headers=headers)
             return res
 
-    def __init__(self):
+    def __init__(self, worker):
         # Check token file
         try:
             import tokens
@@ -73,8 +79,8 @@ class Oauth:
             print("[ERROR]")
             print("[ERROR] To redeem IDs, check https://develop.battle.net/access/")
             sys.exit(1)
-        self.client_id = tokens.tokens[sys.argv[1]]['client_id']
-        self.client_secret = tokens.tokens[sys.argv[1]]['client_secret']
+        self.client_id = tokens.tokens[worker]['client_id']
+        self.client_secret = tokens.tokens[worker]['client_secret']
         self.oauth_client = BackendApplicationClient(client_id=self.client_id)
         self.token = self.oauth_login(self.oauth_client)
 
@@ -149,7 +155,8 @@ class Worker:
         db_characters.create_index([('name', pymongo.ASCENDING), ('realm', pymongo.ASCENDING)], unique=True)
         for realm in characters:
             self.logger("[INFO] Init {region}-{faction}-{realm}".format(region=self.region, faction=self.faction, realm=realm))
-            doc = [ { "name": c, "realm": realm, "lastModified": None } for c in characters[realm] if db_characters.find_one({"name": c, "realm": realm}) is None and realm in self.realm_slug ]
+            d = datetime.datetime(1970,1,1)
+            doc = [ { "name": c, "realm": realm, "lastModified": d } for c in characters[realm] if db_characters.find_one({"name": c, "realm": realm}) is None and realm in self.realm_slug ]
             if len(doc) == 0:
                 print("[INFO] 0 documents to insert, skipping")
             else:
@@ -197,8 +204,7 @@ class Worker:
                         self.logger("[WARN] Bracket {region}-{realm}-{name} not found".format(region=self.region, realm=doc['realm'], name=doc['name']), False)
                         return False
                     else:
-                        self.logger("[ERROR] Unexpected bracket error {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
-                        self.logger("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
+                        self.logger("[ERROR] [{code}] Unexpected bracket error for {region}-{realm}-{name}".format(code=res.status_code, region=self.region, realm=doc['realm'], name=doc['name']))
                         if res.status_code == 503:
                             self.logger("[ERROR] Sleep 600 seconds...")
                             time.sleep(600)
@@ -208,8 +214,7 @@ class Worker:
             self.logger("[WARN] Characters {region}-{realm}-{name} not found".format(region=self.region, realm=doc['realm'], name=doc['name']), False)
             return False
         else:
-            self.logger("[ERROR] Unexpected summary error for {region}-{realm}-{name}".format(region=self.region, realm=doc['realm'], name=doc['name']))
-            self.logger("[ERROR] [{code}] {text}".format(code=res.status_code, text=res.text))
+            self.logger("[ERROR] [{code}] Unexpected summary error for {region}-{realm}-{name}".format(code=res.status_code, region=self.region, realm=doc['realm'], name=doc['name']))
             return None
         return True
 
@@ -268,29 +273,52 @@ class Worker:
             self.logger("[INFO] Graceful shutdown")
             sys.exit(0)
 
-    def __init__(self, region, faction):
+    def insert_character(self, realm, name):
+        db_characters = self.mongo.db['pvpdb']['characters_{r}_{f}'.format(r=self.region, f=self.faction)]
+        d = datetime.datetime(1970,1,1)
+        doc = [ { "name": name, "realm": realm, "lastModified": d } ]
+        if len(doc) == 0:
+            print("[INFO] 0 documents to insert, skipping")
+        else:
+            res = db_characters.insert_many(doc)
+            if res.acknowledged:
+                print("[INFO] Inserted {} documents".format(len(doc)))
+            else:
+                print("[ERROR] Could not insert {} documents".format(len(doc)))
+
+
+    def __init__(self, worker, region, faction):
         # Check usage
         if len(sys.argv) <= 1:
             self.logger("[ERROR] Usage: workers-pvpdb.py <tokenid> [action] [region] [faction]")
             sys.exit(1)
 
         self.realm_slug = self.generate_realm_slug('rio/db_realms.lua')
-        self.oauth = Oauth()
         self.mongo = Mongo()
+        self.oauth = Oauth(worker)
         self.region = region
         self.faction = faction
         self.set_current_season()
 
 def main():
-    if len(sys.argv) >= 3 and sys.argv[2] == "init":
+    if len(sys.argv) >= 2 and sys.argv[1] == "init":
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
-                worker = Worker(r, f)
+                worker = Worker(sys.argv[2], r, f)
                 worker.init_characters()
-    elif len(sys.argv) >= 3 and sys.argv[2] == "update":
+    elif len(sys.argv) >= 2 and sys.argv[1] == "update":
         for r in ["eu", "us", "kr", "tw"]:
             for f in ["alliance", "horde"]:
-                worker = Worker(r, f)
+                worker = Worker(sys.argv[2], r, f)
                 worker.update_characters()
+    elif len(sys.argv) >= 6 and sys.argv[1] == "insert":
+        region = sys.argv[3]
+        faction = sys.argv[4]
+        realm = sys.argv[5]
+        name = sys.argv[6]
+        worker = Worker(sys.argv[2], region, faction)
+        worker.insert_character(realm, name)
+    else:
+        usage()
 
 main()
